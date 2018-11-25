@@ -1,5 +1,5 @@
 ---
-layout: post
+layout: default
 title:  "Building a multi label classificator with Spark ML"
 date:   2018-11-20 22:44:29 +0100
 categories: Apache Spark
