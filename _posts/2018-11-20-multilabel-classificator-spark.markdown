@@ -67,32 +67,48 @@ Before diving into the code, lets take a look at spark ml class hierarchy, so we
 
 ![SparkML classes tree](/assets/posts/multilabel-classification-spark/sparkml_classes_tree.png)
 
-The diagram above depicts the backbone classes of the ML library, on which most of the others build on. The diagram is oriented towards the `DeveloperAPI`, and so only shows the methods that you need to implement if you extend / implement the class. One important thing to note here is that `OneVsRest` classifier implements directly the `Estimator` class instead the `Classifier` one. We will discuss this in the following section.
+The diagram above depicts the backbone classes of the ML library, on which most of the others build on. The diagram is oriented towards the `DeveloperAPI`, and so only shows the methods that you need to implement if you extend / implement the class. You can see two branches, the one deriving from `Estimator` and the one deriving from `Transformer`, with a lot of similarities (in terms of structure and naming). This is because Spark separates the training and evaluation / test / exploitation stages. So, when you train a `Classifier` on your data, what you obtain is a `ClassificationModel`. This can become more clear if we take a look at the actual implementation.
+
+{% highlight scala %}
+// Code from org.apache.spark.ml.Predictor.scala, simplified for the sake of clarity
+abstract class Predictor[
+    FeaturesType,
+    Learner <: Predictor[FeaturesType, Learner, M],
+    M <: PredictionModel[FeaturesType, M]]
+  extends Estimator[M] with PredictorParams {
+
+   /**
+    * Train a model using the given dataset and parameters.
+    * See how the output of this model is of type M, which if defined to be a subclass of PredictionModel
+    */
+    protected def train(dataset: Dataset[_]): M
+
+    ...
+}
+{% endhighlight %}
+
+This implies that if we want to build or own classifer, we will need to implement both the `Estimator` and `Transformer` interfaces. This requirement will greatly influence our solution, as we will see in the next section.
 
 ### Estimator vs Classifier
 
-The first approach I took for building the multilabel classficator, was to try to write it from scratch by implementing the `Classifier` interface. It made sense to me, since after all I wanted to write a classifier.
+If you take another look at the above diagram, you will note that `OneVsRest` classifier implements directly the `Estimator` class instead the `Classifier` one, despite being a classification technique and being in the classification package. This is mainly due to Spark ML classes being designed to implement actual concrete machine learning methods, rather than meta algorithms (or ensembles) as it is the case. 
+The problem arises from the implementation of the `ClassificationModel` abstract class, rather than the `Classifier`. If you recall the diagram, this class requires us to implement the `predictRaw` method. The docstring for this method states the following:
+
+```
+Raw prediction for each possible label. The meaning of a "raw" prediction may vary between algorithms, but it intuitively gives a measure of confidence in each possible label (where larger = more confident).
+```
+
+In the case of binary classifiers (as the ones used by `OneVsRest` and binary relevance), this output if often the probability of the instance to be of class C. So if we want to implement this method, we need access to the underlying probabilities predicted by each model. Something like the following:
 
 
-
-
-
-
-
-
-
-Jekyll also offers powerful support for code snippets:
-
-{% highlight ruby %}
-def print_hi(name)
-  puts "Hi, #{name}"
-end
-print_hi('Tom')
-#=> prints 'Hi, Tom' to STDOUT.
+{% highlight scala %}
+  override protected def predictRaw(features: Vector): Vector = {
+    // Models is an array of binary classifiers for each class
+    // We just pick the positive probability for each model ( p = P(C|X) instead of 1 - p)
+    Vectors.dense(models.map{ _.predictRaw(features).toDense.values(1) })
+  }
 {% endhighlight %}
 
-Check out the [Jekyll docs][jekyll-docs] for more info on how to get the most out of Jekyll. File all bugs/feature requests at [Jekyll’s GitHub repo][jekyll-gh]. If you have questions, you can ask them on [Jekyll Talk][jekyll-talk].
+Unfortunatly the method predictRaw is protected, so it is not accesible outside the spark ml library making it impossible to implement this method. That's the reason I would extend the Estimator / Model interface instead.
 
-[jekyll-docs]: https://jekyllrb.com/docs/home
-[jekyll-gh]:   https://github.com/jekyll/jekyll
-[jekyll-talk]: https://talk.jekyllrb.com/
+
