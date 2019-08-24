@@ -11,6 +11,11 @@ categories: Apache Spark
 - [Getting the data](#Getting the data)
 - [Spark ml class hierarchy](#Spark ml class hierarchy)
   * [Estimator vs Classificator](#Estimator vs Classificator)
+- [OneVsRest](#OneVsRest)
+  * [Estimator](#Estimator)
+  * [Transformer](#Transformer)
+  * [Some extra notes](#Some extra notes)
+- [Conclussions](#Conclussions)
 <!--te-->
 
 # Introduction
@@ -55,6 +60,48 @@ As to date, Spark ML doesn't offer any algorithm adapted to multilabel classific
 
 # Getting the data
 
+The first step of any machine learning project is getting the data, and prepare 
+it to make work with it easier. If you download the data from the above link, you 
+will see that there is a huge XML file for each entity (Ex. Post, User, ect.).
+
+Unfortunatly, there is not an entity for questions, they are included in the `Posts.xml`
+file. This can be solved easily, since each post has a `PostTypeId` field, to 
+indicate the type of the post. All questions have `PostTypeId = 1`.
+
+Aside from this, this format has some other inconvenients:
+
+* Reading XML files is very slow
+* The files are not partitioned, so we can not take advantage of the Spark
+parallelization capabilities.
+
+So before start any work on this data, we will extract the questions and transform it to date-partitioned 
+[parquet files](parquetreference). Parquet is a columnar format, that is designed with 
+parallelization and speed in mind.
+
+To transform the data from XML to parquet, we will use Spark itself, and the 
+[spark-xml](reference) library developed by databricks. Conceptually, this
+program follows the following structure.
+
+```scala
+val questions = spark
+                  .read
+                  .format("com.databricks.spark.xml")
+                  .option("rowTag", "row")
+                  .where("_PostTypeId = 1 AND _Tags is not null AND _CreationDate is not null")
+```
+
+There are two problems with this approach:
+
+* It is slow, due to the file not being partitioned
+* There is a catch with the `spark-xml` library, it will not correctly
+process XML entitied with no inner childs.
+
+To solve this problems I created a [bash script](reference) that split the XML file in chunks of
+a specified number of lines, and adds a dummy child to each `row` object. After this I was
+finally able to read the XML, extract the questions and write them as parquet files using
+Spark. You can see [here](reference) see the final code.
+
+
 # Spark ml class hierarchy
 
 In the binary relevance technique that I decided to adopt, you have to build a binary classifier for each class and then aggregate the results of all of them. Spark provides models for binary classification, however does not provide anything relating the aggregation of models. So you will have to build your own. 
@@ -87,28 +134,142 @@ abstract class Predictor[
 }
 {% endhighlight %}
 
-This implies that if we want to build or own classifer, we will need to implement both the `Estimator` and `Transformer` interfaces. This requirement will greatly influence our solution, as we will see in the next section.
+This implies that if we want to build or own classifer, we will need to implement both the 
+`Estimator` and `Transformer` interfaces. This requirement will greatly influence our solution, 
+as we will see in the next section.
 
-### Estimator vs Classifier
+## Estimator vs Classifier
 
-If you take another look at the above diagram, you will note that `OneVsRest` classifier implements directly the `Estimator` class instead the `Classifier` one, despite being a classification technique and being in the classification package. This is mainly due to Spark ML classes being designed to implement actual concrete machine learning methods, rather than meta algorithms (or ensembles) as it is the case. 
-The problem arises from the implementation of the `ClassificationModel` abstract class, rather than the `Classifier`. If you recall the diagram, this class requires us to implement the `predictRaw` method. The docstring for this method states the following:
+If you take another look at the above diagram, you will note that `OneVsRest` classifier 
+implements directly the `Estimator` class instead the `Classifier` one, despite being a 
+classification technique and being in the classification package. This is mainly due to 
+that in the beginnning of the Spark ML library, classes were designed to implement actual 
+concrete machine learning methods, rather than meta algorithms (or ensembles) as it is the case. 
 
-```
-Raw prediction for each possible label. The meaning of a "raw" prediction may vary between algorithms, but it intuitively gives a measure of confidence in each possible label (where larger = more confident).
-```
+This has changed, and now meta algorithms are better supported. In fact, there are already 
+[plans to refactor OneVsRest to extend the Classifier interface in Spark 3.0](https://issues.apache.org/jira/browse/SPARK-8799)
 
-In the case of binary classifiers (as the ones used by `OneVsRest` and binary relevance), this output if often the probability of the instance to be of class C. So if we want to implement this method, we need access to the underlying probabilities predicted by each model. Something like the following:
-
+I will follow the current implementation and extend the `Estimator` class also. For two reasons,
+so we can use the actual `OneVsRest` implementation, and because `ClassificationModel` methods 
+signature don't fit what we need. The `ClassificationModel`  implements two methods to get the 
+actual predictions, `raw2prediction` and `predict`. If we take a look at the signature of these 
+methods, we can see that they expect a `Double` as output. But what we want to return is an 
+`Array[Double]` since each question can have multiple labels. Changing this would imply overriding 
+almost all of the `ClassificationModel` methods, killing the purpose of extending it.
 
 {% highlight scala %}
-  override protected def predictRaw(features: Vector): Vector = {
-    // Models is an array of binary classifiers for each class
-    // We just pick the positive probability for each model ( p = P(C|X) instead of 1 - p)
-    Vectors.dense(models.map{ _.predictRaw(features).toDense.values(1) })
+  /**
+   * Predict label for the given features.
+   * This method is used to implement `transform()` and output [[predictionCol]].
+   *
+   * This default implementation for classification predicts the index of the maximum value
+   * from `predictRaw()`.
+   */
+  override def predict(features: FeaturesType): Double = {
+    raw2prediction(predictRaw(features))
   }
+
+  /**
+   * Given a vector of raw predictions, select the predicted label.
+   * This may be overridden to support thresholds which favor particular labels.
+   * @return  predicted label
+   */
+  protected def raw2prediction(rawPrediction: Vector): Double = rawPrediction.argmax
 {% endhighlight %}
 
-Unfortunatly the method predictRaw is protected, so it is not accesible outside the spark ml library making it impossible to implement this method. That's the reason I would extend the Estimator / Model interface instead.
+# OneVsRest
+
+Okay, we have decided to adapt the current `OneVsRest` implementation, So what is it missing to able 
+to handle multilable problems? We have  to look at the implementation for the `Estimator` and `Transformer` interfaces mentioned above. 
+
+## Estimator
+
+The main method to implement when extending the `Estimator` class is the `fit` method. It is responsible for
+performing all the actual training of the model. The main change I introduced, was support for label columns
+of type `Array[String]`, instead of `Double`, just for convenience.
+
+The core part of the `fit` method consists on fitting a model for each label. 
+
+{% highlight scala %}
+override def fit(dataset: Dataset[_]): OneVsRestMultiModel = {
+  ...
+    // create k columns, one for each binary classifier.
+    val labels = getLabels(dataset)
+    var labelsMapping =  Map[Int, String]()
+    val models = labels.zipWithIndex.map { case (label, index) =>
+      labelsMapping = labelsMapping + ((index, label))
+      val labelColName = "mc2b$" + index
+      // This is one of the changes with the OneVsRest implementation
+      // we support here labelCol being an Array of strings
+      val trainingDataset = multiclassLabeled.withColumn(
+        labelColName, when(array_contains(col($(labelCol)), label), 1.0).otherwise(0.0))
+      val classifier = getClassifier
+      val paramMap = new ParamMap()
+      paramMap.put(classifier.labelCol -> labelColName)
+      paramMap.put(classifier.featuresCol -> getFeaturesCol)
+      paramMap.put(classifier.predictionCol -> getPredictionCol)
+      classifier.fit(trainingDataset, paramMap)
+    }.toArray[ClassificationModel[_, _]]
+  ...
+}
+{% endhighlight %}
+
+You can see the full code [on Github](https://github.com/JMLizano/StackOverflow-Question-Tagging/blob/master/app/com/jmlizano/classification/OnevsRestMultiLabel.scala#L316).
 
 
+## Transformer
+
+For the `Transformer` the main method to implement is the `transform` method, responsible for adding a new
+column to the input `DataFrame` with the computed predictions. Basically, for each row, this method collects 
+the prediction of each model in a `Map`, where the key indicates the label and the value the prediction for 
+that label. 
+Remember that for each class we have trained a binary classifier, so 0 indicates that the label does
+not apply to the row and 1 that the label applies to the row. For example in case we have only two labels: python and
+javascript, assuming we enconde python as 1 and javascript as 0, the map would be something like:
+
+Row 1 -> {0 -> 0, 1 -> 1} # The label python applies to this question
+Row 2 -> {0 -> 1, 1 -> 0} # The label javascript applies to this question
+etc.
+
+The main change from the original implementation is related to this `Map`. In the original `OneVsRest` instead of 
+binary predictions, they compute the 'raw prediction' (some sort of confidence), and then they choose the label 
+with the highest confidence, like the following.
+
+{% highlight scala %}
+  // output the index of the classifier with highest confidence as prediction
+  val labelUDF = udf { (predictions: Map[Int, Double]) =>
+    predictions.maxBy(_._2)._1.toDouble
+  }
+  // output label and label metadata as prediction
+  aggregatedDataset
+    .withColumn(getPredictionCol, labelUDF(col(accColName)), labelMetadata)
+{% endhighlight %}
+
+In our case, we want to output all the labels that apply to the question, so the code looks like the following.
+
+{% highlight scala %}
+  // output the index of all classifiers with positive prediction
+  val labelUDF = udf { (predictions: Map[Int, Double]) =>
+    predictions.collect { case pred if pred._2 == 1 => pred._1.toDouble }.toSeq
+  }
+  aggregatedDataset
+          .withColumn(getPredictionCol, labelUDF(col(accColName)))
+
+{% endhighlight %}
+
+## Some extra notes
+
+Aside from the exposed above, there is one method that applies to both `Estimator` and `Transformer`, the
+`transformSchema` method. This method needs to be implemented by all `PipelineStages` classes, and serves 
+as a way of 'static' checking of the code. It should validate that the input schema is suitable for the stage 
+and also produce what the expected output of your pipeline stage is based on any parameters set and an input schema.
+
+In my implementation I have skipped the part of validating the input, since Spark does not offer any method
+for checking that the type of Column is an Array, and also I can not use the default implementation, since
+it is checks the label column to be numeric (at the `Predictor` level), which is not the case.
+
+# Conclussions
+
+We have covered several steps of the machine learning pipeline in this post, from data extraction to model training.
+And along the way we have take a look at the internals of the Spark ml library. For the second part of this series, 
+we will dive in the final steps of productionizing a machine learning model: Serialization & Serving of the model.
