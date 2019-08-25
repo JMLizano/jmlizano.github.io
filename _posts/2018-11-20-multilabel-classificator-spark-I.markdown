@@ -15,7 +15,8 @@ categories: Apache Spark
   * [Estimator](#Estimator)
   * [Transformer](#Transformer)
   * [Some extra notes](#Some extra notes)
-- [Conclussions](#Conclussions)
+- [Serialization](#Serialization)
+- [Serving](#Serving)
 <!--te-->
 
 # Introduction
@@ -44,6 +45,8 @@ The problem statement is very clear. Train a classifier on the StackOverflow pos
 * `Body`
 * `Title` 
 * `Tags` 
+
+You can find all the code related to this post in [Github](git@github.com:JMLizano/StackOverflow-Question-Tagging.git)
 
 # Multilabel classification
 
@@ -268,8 +271,41 @@ In my implementation I have skipped the part of validating the input, since Spar
 for checking that the type of Column is an Array, and also I can not use the default implementation, since
 it is checks the label column to be numeric (at the `Predictor` level), which is not the case.
 
-# Conclussions
+# Serialization
 
-We have covered several steps of the machine learning pipeline in this post, from data extraction to model training.
-And along the way we have take a look at the internals of the Spark ml library. For the second part of this series, 
+With the above, we have covered several steps of the machine learning pipeline, from data extraction to model training.
+And along the way we have take a look at the internals of the Spark ml library. Now, 
 we will dive in the final steps of productionizing a machine learning model: Serialization & Serving of the model.
+
+Unfortunately support for serialization in the Spark ml library is not very good. In the old mllib there was
+some kind of PMML support, but it still hasn't been added to the new ml package.
+
+So the choices are either implement your own serialization layer, or use Spark's one and limit yourself to 
+only being able to read the model again with Spark. Since this is only a learning project, I have used the
+Spark serialization, but in real world project, you would need to implement your own serialization, in order
+to be able to serve it without requiring Spark afterwards. 
+
+There are some interesting projects that offer support in this regard, like [mlflow](https://mlflow.org/) 
+and [mleap](https://github.com/combust/mleap). These projectsalso offer tools for the serving layer, 
+making them a very interesting approach.
+
+The implementation of the serialization itself is not very interesting. Spark offers a couple of traits
+for it `MLReadable` and `MLWritable`. This part was easy, since basically the only thing I had to do is 
+copying over the corresponding code from the `OneVsRest` implementation.
+
+# Serving
+
+For serving the model, I found again that Spark does not offer any kind of tool. And since I am using the
+Spark serialization layer, I can't not use any of the above mentioned tools. So I opted for the simplest
+approach, building a basic HTTP server myself to serve the model.
+
+For the HTTP server I choose to use the [Play framework](https://www.playframework.com/). Is one of the 
+most popular HTTP frameworks in Scala and it is very easy to get started with it. 
+
+The structure of the application is very simple, is depicted at a high level in the following figure.
+
+![SparkML classes tree](/assets/posts/multilabel-classification-spark/serving_model.png)
+
+Basically the idea is to create an object that encapsulates the model, that we read from disk, and 
+offers a simple predict method to use this model. Since objects in Scala are singletons, we don't have
+to worry about avoiding creating a model object for each http connection.
