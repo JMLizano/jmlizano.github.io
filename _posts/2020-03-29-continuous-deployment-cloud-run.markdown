@@ -2,12 +2,16 @@
 layout: default
 title:  "Continuous deployment to cloud run"
 date:   2020-03-29 22:44:29 +0100
-categories: Google Cloud
+categories: devops
 ---
 
 <!--ts-->
 - [Introduction](#Introduction)
-- [Github actions vs Cloud Build](#Getting the data)
+- [CI/CD tools](#CI/CD tools)
+- [Configuring Github Actions](# Configuring Github Actions)
+    * [Continous integration](#Continous integration)
+    * [Continous deployment](#Continous deployment)
+- [Conclusion](#Conclusion)
 <!--te-->
 
 
@@ -26,7 +30,7 @@ achieve is depicted in the following figure.
 
 ![ci/cd workflow](/assets/posts/ci-cd-cloud-run/cicd-workflow.png)
 
-# Build & deployment tools
+# CI/CD tools
 
 The first decision is which CI/CD tool to use. This can be harder than you may think at first,
 due to the miriad of available options nowadays: Jenkins, CircleCI, CodeShip, Github Actions,
@@ -148,7 +152,8 @@ to [create secrets in Github](https://help.github.com/es/actions/configuring-and
 and make them available to the workflow as environment variables.
 After adding this variables, the end file is as follows.
 
-{% highlight yaml %}
+{% raw %}
+```yaml
 name: PR test CI
 
 on:
@@ -171,11 +176,12 @@ jobs:
     - name: Run tests
       run: sbt test
       env:
-        TWITTER_CONSUMER_TOKEN_KEY: ${{ secrets.TWITTER_CONSUMER_TOKEN_KEY }}
+        TWITTER_CONSUMER_TOKEN_KEY: ${{ {{ secrets.TWITTER_CONSUMER_TOKEN_KEY }}
         TWITTER_CONSUMER_TOKEN_SECRET: ${{ secrets.TWITTER_CONSUMER_TOKEN_SECRET }}
         TWITTER_ACCESS_TOKEN_KEY: ${{ secrets.TWITTER_ACCESS_TOKEN_KEY }}
         TWITTER_ACCESS_TOKEN_SECRET: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET }}
-{% endhighlight %}
+```
+{% endraw %}
 
 And that's it, this is all you need to setup a basic CI flow, where the project tests will be
 executed each time a pull request agains `master` is created. Of course, you can futher improve
@@ -227,7 +233,8 @@ Once we have this, we only need to create a new workflow, that will execute this
 workflow is quite similar to the previous one (since we still want to exectute the tests, just
 in case), with a couple of extra steps to perform the deployment. 
 
-{% highlight yaml %}
+{% raw %}
+```yaml
 name: Deploy
 
 on:
@@ -268,7 +275,8 @@ jobs:
     
     - name: Build docker image and deploy to cloud run
       run:  bash cloud_run_deploy.sh
-{% endhighlight %}
+```
+{% endraw %}
 
 The extra steps are basically for setting up the `gcloud` command line tool, the docker
 authentication to google cloud registry, and finally executing our previous script. There
