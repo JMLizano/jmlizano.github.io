@@ -7,7 +7,7 @@ categories: devops
 
 <!--ts-->
 - [Introduction](#Introduction)
-- [CI/CD tools](#CI/CD-tools)
+- [CI/CD tools](#CI-CD-tools)
 - [Configuring Github Actions](#Configuring-Github-Actions)
     * [Continous integration](#Continous-integration)
     * [Continous deployment](#Continous-deployment)
@@ -30,7 +30,7 @@ achieve is depicted in the following figure.
 
 ![ci/cd workflow](/assets/posts/ci-cd-cloud-run/cicd-workflow.png)
 
-# CI/CD tools
+# CI-CD tools
 
 The first decision is which CI/CD tool to use. This can be harder than you may think at first,
 due to the miriad of available options nowadays: Jenkins, CircleCI, CodeShip, Github Actions,
