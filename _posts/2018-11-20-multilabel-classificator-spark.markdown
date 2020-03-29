@@ -286,7 +286,7 @@ Spark serialization, but in real world project, you would need to implement your
 to be able to serve it without requiring Spark afterwards. 
 
 There are some interesting projects that offer support in this regard, like [mlflow](https://mlflow.org/) 
-and [mleap](https://github.com/combust/mleap). These projectsalso offer tools for the serving layer, 
+and [mleap](https://github.com/combust/mleap). These projects also offer tools for the serving layer, 
 making them a very interesting approach.
 
 The implementation of the serialization itself is not very interesting. Spark offers a couple of traits
