@@ -7,10 +7,10 @@ categories: devops
 
 <!--ts-->
 - [Introduction](#Introduction)
-- [CI/CD tools](#CI/CD tools)
-- [Configuring Github Actions](# Configuring Github Actions)
-    * [Continous integration](#Continous integration)
-    * [Continous deployment](#Continous deployment)
+- [CI/CD tools](#CI/CD-tools)
+- [Configuring Github Actions](#Configuring-Github-Actions)
+    * [Continous integration](#Continous-integration)
+    * [Continous deployment](#Continous-deployment)
 - [Conclusion](#Conclusion)
 <!--te-->
 
